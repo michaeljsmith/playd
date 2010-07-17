@@ -1,0 +1,9 @@
+This project is a simple python script that runs as a daemon. It creates a
+fifo in the user's home directory from which it reads a list of files. It then
+passes those files to another exe to process - by default mplayer. It also
+accepts a number of control commands - these are separated from filenames by
+null characters.
+
+The same exe can also be invoked in such a way as to provide user control over
+the daemon via the pipe. This mode can be considered as the 'user space'
+tools.
