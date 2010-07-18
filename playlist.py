@@ -1,8 +1,13 @@
 #!/usr/bin/env python3.1
 
-from threading import Thread, Lock, Condition
+from threading import Thread, Condition
 from time import sleep
-from sys import stdin
+from sys import argv
+from os.path import basename, abspath, join
+from os import environ
+
+class PlaydError(Exception): pass
+class NoActionError(PlaydError): pass
 
 def trace(x):
 	print(x)
@@ -56,6 +61,10 @@ class PlayThread(Thread):
 		finally:
 			self.condition.release()
 
+		if self.action:
+			trace('Play thread exiting, waiting for action to shutdown.')
+			self.action.wait()
+
 		trace('Play thread ended.')
 
 	def exit(self):
@@ -81,6 +90,22 @@ class PlayThread(Thread):
 		finally:
 			self.condition.release()
 
+	def next(self):
+		trace('Skipping action.')
+		self.condition.acquire()
+		action = self.action
+		try:
+			if not action:
+				raise NoActionError()
+
+			action.cancel()
+		finally:
+			self.condition.release()
+		trace('Skipping action cancel issued, waiting for action to shutdown.')
+		if action:
+			self.action.wait()
+		trace('Skipping action finished.')
+
 class ActionPerformer(object):
 
 	class ActionThread(Thread):
@@ -96,12 +121,14 @@ class ActionPerformer(object):
 		def run(self):
 			self.condition.acquire()
 			try:
-				self.condition.wait(2.0)
+				self.condition.wait(8.0)
 				if not self.cancelled:
 					print('out: ' + self.x)
 			finally:
 				self.condition.release()
-			if not self.cancelled:
+			if self.cancelled:
+				self.on_cancelled()
+			else:
 				self.on_finished()
 
 		def cancel(self):
@@ -119,6 +146,8 @@ class ActionPerformer(object):
 
 	def cancel(self):
 		self.thread.cancel()
+
+	def wait(self):
 		self.thread.join()
 
 def main():
@@ -127,10 +156,31 @@ def main():
 	trace('Main thread launching play thread.')
 	play_thread.start()
 
-	for line in stdin:
-		if line[-1] == '\n':
-			line = line[:-1]
-		play_thread.queue(line)
+	home = environ['HOME']
+	input_filename = abspath(join(home, basename(argv[0])))
+
+	while True:
+		try:
+			input = open(input_filename, 'r')
+		except IOError as err:
+			print('Unable to open input file: ' + input_filename + ': ' + str(err))
+			break
+
+		command = input.readline().strip()
+		if command == 'exit':
+			break
+		if command == 'next':
+			try:
+				play_thread.next()
+			except NoActionError:
+				print('No action playing to skip.')
+		elif command == 'play':
+			for line in input:
+				if line[-1] == '\n':
+					line = line[:-1]
+				play_thread.queue(line)
+		else:
+			print('Unknown command received: ' + command)
 
 	trace('Main thread exiting play thread.')
 	play_thread.exit()
