@@ -5,6 +5,7 @@ from time import sleep
 from sys import argv
 from os.path import basename, abspath, join
 from os import environ, mkfifo, remove, access, F_OK
+from subprocess import Popen
 
 class PlaydError(Exception): pass
 class NoActionError(PlaydError): pass
@@ -108,42 +109,31 @@ class PlayThread(Thread):
 			self.action.wait()
 		trace('Skipping action finished.')
 
-class ActionPerformer(object):
+class ChildProcessActionPerformer(object):
 
 	class ActionThread(Thread):
 
-		def __init__(self, x, condition, on_finished, on_cancelled):
+		def __init__(self, arg, on_finished, on_cancelled):
 			super().__init__()
-			self.x = x
-			self.condition = condition
 			self.cancelled = False
 			self.on_finished = on_finished
 			self.on_cancelled = on_cancelled
+			self.process = Popen(['mplayer', arg])
 
 		def run(self):
-			self.condition.acquire()
-			try:
-				self.condition.wait(8.0)
-				if not self.cancelled:
-					print('out: ' + self.x)
-			finally:
-				self.condition.release()
+			self.process.wait()
 			if self.cancelled:
 				self.on_cancelled()
 			else:
 				self.on_finished()
 
 		def cancel(self):
-			self.condition.acquire()
-			try:
-				self.cancelled = True
-				self.condition.notify_all()
-			finally:
-				self.condition.release()
+			self.cancelled = True
+			self.process.terminate()
 
 	def __init__(self, x, on_finished, on_cancelled):
 		self.condition = Condition()
-		self.thread = self.ActionThread(x, self.condition, on_finished, on_cancelled)
+		self.thread = self.ActionThread(x, on_finished, on_cancelled)
 		self.thread.start()
 
 	def cancel(self):
@@ -168,7 +158,7 @@ class StartCommand(Command):
 			return
 
 		try:
-			play_thread = PlayThread(ActionPerformer)
+			play_thread = PlayThread(ChildProcessActionPerformer)
 			trace('Main thread launching play thread.')
 			play_thread.start()
 
@@ -300,7 +290,7 @@ def configure_application():
 			if args[0] and args[0][0] == '-':
 				parse_global_args(args, parse_cmd_args)
 			else:
-				items.append(args[0])
+				items.append(abspath(args[0]))
 				parse_cmd_args(args[1:])
 		parse_cmd_args(args)
 		return QueueCommand(opts.fifo_path, items)
