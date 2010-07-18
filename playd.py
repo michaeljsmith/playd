@@ -8,6 +8,7 @@ from os import environ
 
 class PlaydError(Exception): pass
 class NoActionError(PlaydError): pass
+class CmdLineError(PlaydError): pass
 
 def trace(x):
 	print(x)
@@ -150,41 +151,137 @@ class ActionPerformer(object):
 	def wait(self):
 		self.thread.join()
 
-def main():
-	trace('Main thread started.')
-	play_thread = PlayThread(ActionPerformer)
-	trace('Main thread launching play thread.')
-	play_thread.start()
+class Command(object):
+	pass
+
+class StartCommand(Command):
+	def __init__(self, fifo_path):
+		self.fifo_path = fifo_path
+
+	def perform(self):
+		trace('Main thread started.')
+		play_thread = PlayThread(ActionPerformer)
+		trace('Main thread launching play thread.')
+		play_thread.start()
+
+		while True:
+			try:
+				input = open(self.fifo_path, 'r')
+			except IOError as err:
+				print('Unable to open command fifo: ' + self.fifo_path + ': ' + str(err))
+				break
+
+			command = input.readline().strip()
+			if command == 'exit':
+				break
+			if command == 'next':
+				try:
+					play_thread.next()
+				except NoActionError:
+					print('No action playing to skip.')
+			elif command == 'play':
+				for line in input:
+					if line[-1] == '\n':
+						line = line[:-1]
+					play_thread.queue(line)
+			else:
+				print('Unknown command received: ' + command)
+
+		trace('Main thread exiting play thread.')
+		play_thread.exit()
+		trace('Main thread ended')
+
+class StopCommand(Command):
+	def __init__(self, fifo_path):
+		self.fifo_path = fifo_path
+
+	def perform(self):
+		try:
+			output = open(self.fifo_path, 'w')
+			output.write('exit\n')
+		except IOError as err:
+			print('Unable to open command fifo: ' + self.fifo_path + ': ' + str(err))
+
+class NextCommand(Command):
+	def __init__(self, fifo_path):
+		self.fifo_path = fifo_path
+
+	def perform(self):
+		try:
+			output = open(self.fifo_path, 'w')
+			output.write('next\n')
+		except IOError as err:
+			print('Unable to open command fifo: ' + self.fifo_path + ': ' + str(err))
+
+class VersionCommand(Command):
+	def perform(self):
+		print('playd 0.1a -- prerelease version.')
+
+def configure_application():
+
+	class GlobalOptions(object): pass
+	opts = GlobalOptions()
 
 	home = environ['HOME']
-	input_filename = abspath(join(home, basename(argv[0])))
+	opts.fifo_path = abspath(join(home, basename(argv[0])))
 
-	while True:
-		try:
-			input = open(input_filename, 'r')
-		except IOError as err:
-			print('Unable to open input file: ' + input_filename + ': ' + str(err))
-			break
-
-		command = input.readline().strip()
-		if command == 'exit':
-			break
-		if command == 'next':
-			try:
-				play_thread.next()
-			except NoActionError:
-				print('No action playing to skip.')
-		elif command == 'play':
-			for line in input:
-				if line[-1] == '\n':
-					line = line[:-1]
-				play_thread.queue(line)
+	def parse_cmdline(args):
+		if not args: return None
+		arg = args[0]
+		if arg == 'start':
+			return parse_start_command(args[1:])
+		elif arg == 'stop':
+			return parse_stop_command(args[1:])
+		elif arg == 'next':
+			return parse_next_command(args[1:])
 		else:
-			print('Unknown command received: ' + command)
+			parse_global_args(args, parse_cmdline)
 
-	trace('Main thread exiting play thread.')
-	play_thread.exit()
-	trace('Main thread ended')
+	def parse_start_command(args):
+		def parse_cmd_args(args): parse_global_args(args, parse_cmd_args)
+		parse_cmd_args(args)
+		return StartCommand(opts.fifo_path)
+
+	def parse_stop_command(args):
+		def parse_cmd_args(args): parse_global_args(args, parse_cmd_args)
+		parse_cmd_args(args)
+		return StopCommand(opts.fifo_path)
+
+	def parse_next_command(args):
+		def parse_cmd_args(args): parse_global_args(args, parse_cmd_args)
+		parse_cmd_args(args)
+		return NextCommand(opts.fifo_path)
+
+	def parse_global_args(args, next):
+		if not args: return
+		arg = args[0]
+		if arg == '-v' or arg == '--version':
+			opts.version = True
+			next(args[1:])
+		else:
+			raise CmdLineError("Unexpected argument '" + arg + "'.")
+
+	cmd = parse_cmdline(argv[1:])
+
+	if getattr(opts, 'version', False):
+		if not cmd:
+			cmd = VersionCommand()
+		else:
+			raise CmdLineError('--version cannot be used with command.')
+
+	if not cmd:
+		raise CmdLineError('No command given.')
+
+	return cmd
+
+def main():
+	try:
+		cmd = configure_application()
+
+		cmd.perform()
+
+	except CmdLineError as err:
+		print(err)
 
 if __name__ == '__main__':
 	main()
