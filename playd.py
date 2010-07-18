@@ -4,7 +4,7 @@ from threading import Thread, Condition
 from time import sleep
 from sys import argv
 from os.path import basename, abspath, join
-from os import environ
+from os import environ, mkfifo, remove
 
 class PlaydError(Exception): pass
 class NoActionError(PlaydError): pass
@@ -160,32 +160,44 @@ class StartCommand(Command):
 
 	def perform(self):
 		trace('Main thread started.')
-		play_thread = PlayThread(ActionPerformer)
-		trace('Main thread launching play thread.')
-		play_thread.start()
+		try:
+			mkfifo(self.fifo_path)
+		except OSError as err:
+			print('Unable to create command fifo: ' + self.fifo_path + ': ' + str(err))
+			return
 
-		while True:
-			try:
-				input = open(self.fifo_path, 'r')
-			except IOError as err:
-				print('Unable to open command fifo: ' + self.fifo_path + ': ' + str(err))
-				break
+		try:
+			play_thread = PlayThread(ActionPerformer)
+			trace('Main thread launching play thread.')
+			play_thread.start()
 
-			command = input.readline().strip()
-			if command == 'exit':
-				break
-			if command == 'next':
+			while True:
 				try:
-					play_thread.next()
-				except NoActionError:
-					print('No action playing to skip.')
-			elif command == 'play':
-				for line in input:
-					if line[-1] == '\n':
-						line = line[:-1]
-					play_thread.queue(line)
-			else:
-				print('Unknown command received: ' + command)
+					input = open(self.fifo_path, 'r')
+				except IOError as err:
+					print('Unable to open command fifo: ' + self.fifo_path + ': ' + str(err))
+					break
+
+				try:
+					command = input.readline().strip()
+					if command == 'exit':
+						break
+					if command == 'next':
+						try:
+							play_thread.next()
+						except NoActionError:
+							print('No action playing to skip.')
+					elif command == 'play':
+						for line in input:
+							if line[-1] == '\n':
+								line = line[:-1]
+							play_thread.queue(line)
+					else:
+						print('Unknown command received: ' + command)
+				finally:
+					input.close()
+		finally:
+			remove(self.fifo_path)
 
 		trace('Main thread exiting play thread.')
 		play_thread.exit()
@@ -246,7 +258,7 @@ def configure_application():
 	opts = GlobalOptions()
 
 	home = environ['HOME']
-	opts.fifo_path = abspath(join(home, basename(argv[0])))
+	opts.fifo_path = abspath(join(home, '.' + basename(argv[0])))
 
 	def parse_cmdline(args):
 		if not args: return None
