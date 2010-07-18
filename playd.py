@@ -4,11 +4,12 @@ from threading import Thread, Condition
 from time import sleep
 from sys import argv
 from os.path import basename, abspath, join
-from os import environ, mkfifo, remove
+from os import environ, mkfifo, remove, access, F_OK
 
 class PlaydError(Exception): pass
 class NoActionError(PlaydError): pass
 class CmdLineError(PlaydError): pass
+class FifoMissingError(PlaydError): pass
 
 def trace(x):
 	print(x)
@@ -171,37 +172,39 @@ class StartCommand(Command):
 			trace('Main thread launching play thread.')
 			play_thread.start()
 
-			while True:
-				try:
-					input = open(self.fifo_path, 'r')
-				except IOError as err:
-					print('Unable to open command fifo: ' + self.fifo_path + ': ' + str(err))
-					break
-
-				try:
-					command = input.readline().strip()
-					if command == 'exit':
+			try:
+				while True:
+					try:
+						input = open(self.fifo_path, 'r')
+					except IOError as err:
+						print('Unable to open command fifo: ' + self.fifo_path + ': ' + str(err))
 						break
-					if command == 'next':
-						try:
-							play_thread.next()
-						except NoActionError:
-							print('No action playing to skip.')
-					elif command == 'play':
-						for line in input:
-							if line[-1] == '\n':
-								line = line[:-1]
-							play_thread.queue(line)
-					else:
-						print('Unknown command received: ' + command)
-				finally:
-					input.close()
+
+					try:
+						command = input.readline().strip()
+						if command == 'exit':
+							break
+						if command == 'next':
+							try:
+								play_thread.next()
+							except NoActionError:
+								print('No action playing to skip.')
+						elif command == 'play':
+							for line in input:
+								if line[-1] == '\n':
+									line = line[:-1]
+								play_thread.queue(line)
+						else:
+							print('Unknown command received: ' + command)
+					finally:
+						input.close()
+
+			finally:
+				trace('Main thread exiting play thread.')
+				play_thread.exit()
+				trace('Main thread ended')
 		finally:
 			remove(self.fifo_path)
-
-		trace('Main thread exiting play thread.')
-		play_thread.exit()
-		trace('Main thread ended')
 
 class StopCommand(Command):
 	def __init__(self, fifo_path):
@@ -209,6 +212,8 @@ class StopCommand(Command):
 
 	def perform(self):
 		try:
+			if not access(self.fifo_path, F_OK):
+				raise FifoMissingError('file does not exist')
 			output = open(self.fifo_path, 'w')
 			try:
 				output.write('exit\n')
@@ -224,6 +229,8 @@ class QueueCommand(Command):
 
 	def perform(self):
 		try:
+			if not access(self.fifo_path, F_OK):
+				raise FifoMissingError('file does not exist')
 			output = open(self.fifo_path, 'w')
 			try:
 				output.write('play\n')
@@ -240,6 +247,8 @@ class NextCommand(Command):
 
 	def perform(self):
 		try:
+			if not access(self.fifo_path, F_OK):
+				raise FifoMissingError('file does not exist')
 			output = open(self.fifo_path, 'w')
 			try:
 				output.write('next\n')
@@ -272,7 +281,7 @@ def configure_application():
 		elif arg == 'next':
 			return parse_next_command(args[1:])
 		else:
-			parse_global_args(args, parse_cmdline)
+			return parse_global_args(args, parse_cmdline)
 
 	def parse_start_command(args):
 		def parse_cmd_args(args): parse_global_args(args, parse_cmd_args)
@@ -306,7 +315,7 @@ def configure_application():
 		arg = args[0]
 		if arg == '-v' or arg == '--version':
 			opts.version = True
-			next(args[1:])
+			return next(args[1:])
 		else:
 			raise CmdLineError("Unexpected argument '" + arg + "'.")
 
@@ -328,6 +337,11 @@ def main():
 		cmd = configure_application()
 
 		cmd.perform()
+
+	except FifoMissingError as err:
+		argname = basename(argv[0])
+		print('The daemon communication FIFO is missing.')
+		print('Please make sure that daemon is running (try running "' + argname + ' start").')
 
 	except CmdLineError as err:
 		print(err)
