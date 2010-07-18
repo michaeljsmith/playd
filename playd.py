@@ -198,7 +198,27 @@ class StopCommand(Command):
 	def perform(self):
 		try:
 			output = open(self.fifo_path, 'w')
-			output.write('exit\n')
+			try:
+				output.write('exit\n')
+			finally:
+				output.close()
+		except IOError as err:
+			print('Unable to open command fifo: ' + self.fifo_path + ': ' + str(err))
+
+class QueueCommand(Command):
+	def __init__(self, fifo_path, items):
+		self.fifo_path = fifo_path
+		self.items = items
+
+	def perform(self):
+		try:
+			output = open(self.fifo_path, 'w')
+			try:
+				output.write('play\n')
+				for item in self.items:
+					output.write(item + '\n')
+			finally:
+				output.close()
 		except IOError as err:
 			print('Unable to open command fifo: ' + self.fifo_path + ': ' + str(err))
 
@@ -209,7 +229,10 @@ class NextCommand(Command):
 	def perform(self):
 		try:
 			output = open(self.fifo_path, 'w')
-			output.write('next\n')
+			try:
+				output.write('next\n')
+			finally:
+				output.close()
 		except IOError as err:
 			print('Unable to open command fifo: ' + self.fifo_path + ': ' + str(err))
 
@@ -232,6 +255,8 @@ def configure_application():
 			return parse_start_command(args[1:])
 		elif arg == 'stop':
 			return parse_stop_command(args[1:])
+		elif arg == 'queue':
+			return parse_queue_command(args[1:])
 		elif arg == 'next':
 			return parse_next_command(args[1:])
 		else:
@@ -246,6 +271,18 @@ def configure_application():
 		def parse_cmd_args(args): parse_global_args(args, parse_cmd_args)
 		parse_cmd_args(args)
 		return StopCommand(opts.fifo_path)
+
+	def parse_queue_command(args):
+		items = []
+		def parse_cmd_args(args):
+			if not args: return
+			if args[0] and args[0][0] == '-':
+				parse_global_args(args, parse_cmd_args)
+			else:
+				items.append(args[0])
+				parse_cmd_args(args[1:])
+		parse_cmd_args(args)
+		return QueueCommand(opts.fifo_path, items)
 
 	def parse_next_command(args):
 		def parse_cmd_args(args): parse_global_args(args, parse_cmd_args)
